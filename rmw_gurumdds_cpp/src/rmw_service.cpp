@@ -257,13 +257,19 @@ rmw_create_service(
     }
   }
 
+  service_info->listener_ = new(std::nothrow) ServiceListener(service_info);
+  if(!service_info->listener_) {
+    RMW_SET_ERROR_MSG("failed to create response publisher listener");
+    goto fail;
+  }
+
   if (!get_datareader_qos(subscriber, qos_policies, &datareader_qos)) {
     // Error message already set
     goto fail;
   }
 
   request_reader = dds_Subscriber_create_datareader(
-    subscriber, request_topic, &datareader_qos, nullptr, 0);
+    subscriber, request_topic, &datareader_qos, service_info->listener_->get_listener(), dds_SUBSCRIPTION_MATCHED_STATUS);
   if (request_reader == nullptr) {
     RMW_SET_ERROR_MSG("failed to create datareader");
     dds_DataReaderQos_finalize(&datareader_qos);
@@ -290,8 +296,14 @@ rmw_create_service(
     goto fail;
   }
 
+  service_info->pub_listener_ = new(std::nothrow) ServicePubListener(service_info);
+  if(!service_info->pub_listener_) {
+    RMW_SET_ERROR_MSG("failed to create response publisher listener");
+    goto fail;
+  }
+
   response_writer = dds_Publisher_create_datawriter(
-    publisher, response_topic, &datawriter_qos, nullptr, 0);
+    publisher, response_topic, &datawriter_qos, service_info->pub_listener_->get_listener(), 0);
   if (response_writer == nullptr) {
     RMW_SET_ERROR_MSG("failed to create datawriter");
     dds_DataWriterQos_finalize(&datawriter_qos);
@@ -333,6 +345,8 @@ rmw_create_service(
     goto fail;
   }
 
+  dds_DataReader_set_listener_context(request_reader, service_info->listener_);
+  dds_DataWriter_set_listener_context(response_writer, service_info->pub_listener_);
   dds_TypeSupport_delete(request_typesupport);
   request_typesupport = nullptr;
   dds_TypeSupport_delete(response_typesupport);
@@ -363,6 +377,16 @@ fail:
 
   if (response_writer != nullptr) {
     dds_Publisher_delete_datawriter(publisher, response_writer);
+  }
+
+  if (service_info->pub_listener_ != nullptr) {
+    delete service_info->pub_listener_;
+    service_info->pub_listener_ = nullptr;
+  }
+
+  if (service_info->listener_ != nullptr) {
+    delete service_info->listener_;
+    service_info->listener_ = nullptr;
   }
 
   if (request_topic != nullptr) {
@@ -440,6 +464,8 @@ rmw_destroy_service(rmw_node_t * node, rmw_service_t * service)
       return RMW_RET_ERROR;
     }
 
+    delete service_info->listener_;
+    delete service_info->pub_listener_;
     delete service_info;
     service->data = nullptr;
   }
@@ -717,10 +743,14 @@ rmw_take_request(
       }
       uint32_t size = dds_UnsignedLongSeq_get(sample_sizes, 0);
       int64_t sequence_number = 0;
-      int8_t client_guid[16] = {0};
+      dds_GUID_t client_guid{{0}, 0};
+      dds_GUID_t related_guid{{0}, 0};
       dds_SampleInfoEx * sampleinfo_ex = reinterpret_cast<dds_SampleInfoEx *>(sample_info);
-      dds_guid_to_ros_guid(reinterpret_cast<int8_t *>(&sampleinfo_ex->src_guid), client_guid);
+      dds_guid_to_ros_guid(reinterpret_cast<int8_t *>(&sampleinfo_ex->src_guid), reinterpret_cast<int8_t *>(client_guid.prefix));
+      dds_guid_to_ros_guid(reinterpret_cast<int8_t *>(&sampleinfo_ex->related_guid), reinterpret_cast<int8_t *>(related_guid.prefix));
       dds_sn_to_ros_sn(sampleinfo_ex->seq, &sequence_number);
+
+      service_info->pub_listener_->endpoint_add_reader_and_writer(client_guid, related_guid);
 
       bool res = deserialize_request_enhanced(
         type_support->data,
@@ -745,7 +775,7 @@ rmw_take_request(
       // TODO(clemjh): SampleInfo doesn't contain received_timestamp
       request_header->received_timestamp = 0;
       request_header->request_id.sequence_number = sequence_number;
-      memcpy(request_header->request_id.writer_guid, client_guid, 16);
+      memcpy(request_header->request_id.writer_guid, client_guid.prefix, 16);
     }
 
     dds_DataReader_raw_return_loan(request_reader, data_values, sample_infos, sample_sizes);

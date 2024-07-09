@@ -204,7 +204,7 @@ void on_participant_changed(
   }
 
   dds_GUID_t dp_guid;
-  GuidPrefix_t dp_guid_prefix;
+  Guid_t dp_guid_prefix;
   dds_BuiltinTopicKey_to_GUID(&dp_guid_prefix, data->key);
   memcpy(dp_guid.prefix, dp_guid_prefix.value, sizeof(dp_guid.prefix));
   dp_guid.entityId = ENTITYID_PARTICIPANT;
@@ -248,7 +248,7 @@ void on_publication_changed(
   }
 
   dds_GUID_t endp_guid;
-  GuidPrefix_t dp_guid_prefix, endp_guid_prefix;
+  Guid_t dp_guid_prefix, endp_guid_prefix;
   dds_BuiltinTopicKey_to_GUID(&dp_guid_prefix, data->participant_key);
   memcpy(endp_guid.prefix, dp_guid_prefix.value, sizeof(endp_guid.prefix));
   dds_BuiltinTopicKey_to_GUID(&endp_guid_prefix, data->key);
@@ -311,7 +311,7 @@ void on_subscription_changed(
   }
 
   dds_GUID_t endp_guid;
-  GuidPrefix_t dp_guid_prefix, endp_guid_prefix;
+  Guid_t dp_guid_prefix, endp_guid_prefix;
   dds_BuiltinTopicKey_to_GUID(&dp_guid_prefix, data->participant_key);
   memcpy(endp_guid.prefix, dp_guid_prefix.value, sizeof(endp_guid.prefix));
   dds_BuiltinTopicKey_to_GUID(&endp_guid_prefix, data->key);
@@ -357,4 +357,50 @@ void on_subscription_changed(
       reinterpret_cast<const uint32_t *>(endp_guid.prefix)[2],
       endp_guid.entityId);
   }
+}
+
+void on_request_subscription_matched(
+  const dds_DataReader* reader, 
+  const dds_SubscriptionMatchedStatus* status)
+{
+  dds_DataReader * a_reader = const_cast<dds_DataReader *>(reader);
+  ServiceListener * service_listener = static_cast<ServiceListener *>(dds_DataReader_get_listener_context(a_reader));
+  if(service_listener == nullptr) {
+    return;
+  }
+  service_listener->on_subscription_matched(a_reader, status);
+}
+
+
+void on_response_publication_matched(
+  const dds_DataWriter * writer,
+  const dds_PublicationMatchedStatus * status)
+{
+  dds_DataWriter * a_writer = const_cast<dds_DataWriter *>(writer);
+  ServicePubListener * service_pub_listener = static_cast<ServicePubListener *>(dds_DataWriter_get_listener_context(a_writer));
+  if(service_pub_listener == nullptr) {
+      return;
+  }
+  std::lock_guard<std::mutex> lock(service_pub_listener->get_mutex());
+  if (status == nullptr) {
+    return;
+  }
+  Guid_t guid{0};
+  dds_ReturnCode_t ret = dds_RETCODE_OK;
+  if (status->current_count_change == 1) {
+    ret = dds_DataWriter_get_guid_from_subscription_handle(a_writer, status->last_subscription_handle, guid.value);
+    if (ret != dds_RETCODE_OK) {
+      return;
+    }
+    service_pub_listener->add_subscription_guid(guid);
+  } else if (status->current_count_change == -1) {
+    ret = dds_DataWriter_get_guid_from_subscription_handle(a_writer, status->last_subscription_handle, guid.value);
+    if (ret != dds_RETCODE_OK) {
+      return;
+    }
+    service_pub_listener->endpoint_remove_guid(guid);
+  } else {
+    return;
+  }
+  service_pub_listener->condition_notify_all();
 }

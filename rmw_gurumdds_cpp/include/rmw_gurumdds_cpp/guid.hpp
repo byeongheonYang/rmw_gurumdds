@@ -32,38 +32,52 @@ typedef uint8_t octet;
  *
  */
 
-struct GuidPrefix_t
+struct Guid_t
 {
   static constexpr size_t kSize = 16;
+  static constexpr size_t prefix_size = 12;
+  static constexpr size_t entity_size = 4;
   octet value[kSize];
 
-  GuidPrefix_t()
+  Guid_t()
   {
     memset(value, 0, kSize);
   }
 
-  explicit GuidPrefix_t(octet guid[kSize])
+  explicit Guid_t(octet guid[kSize])
   {
     memcpy(value, guid, kSize);
   }
 
-  GuidPrefix_t(const GuidPrefix_t & g)
+  Guid_t(const Guid_t & g)
   {
     memcpy(value, g.value, kSize);
   }
 
-  GuidPrefix_t(GuidPrefix_t && g) noexcept
+  Guid_t(Guid_t && g) noexcept
   {
     memmove(value, g.value, kSize);
   }
 
-  GuidPrefix_t & operator=(const GuidPrefix_t & guidpre)
+  Guid_t(const dds_GUID_t & guid) {
+    memcpy(value, guid.prefix, prefix_size);
+    memcpy(&value[prefix_size], &guid.entityId, entity_size);
+  }
+
+  Guid_t & operator=(const Guid_t & guidpre)
   {
     memcpy(value, guidpre.value, kSize);
     return *this;
   }
 
-  GuidPrefix_t & operator=(GuidPrefix_t && guidpre) noexcept
+  Guid_t & operator=(dds_GUID_t & guid) noexcept
+  {
+    memcpy(value, guid.prefix, prefix_size);
+    memcpy(&value[prefix_size], &guid.entityId, entity_size);
+    return *this;
+  }
+
+  Guid_t & operator=(Guid_t && guidpre) noexcept
   {
     memmove(value, guidpre.value, kSize);
     return *this;
@@ -71,12 +85,12 @@ struct GuidPrefix_t
 
 #ifndef DOXYGEN_SHOULD_SKIP_THIS_PUBLIC
 
-  bool operator==(const GuidPrefix_t & prefix) const
+  bool operator==(const Guid_t & prefix) const
   {
     return memcmp(value, prefix.value, kSize) == 0;
   }
 
-  bool operator!=(const GuidPrefix_t & prefix) const
+  bool operator!=(const Guid_t & prefix) const
   {
     return memcmp(value, prefix.value, kSize) != 0;
   }
@@ -84,9 +98,9 @@ struct GuidPrefix_t
 #endif
 };
 
-inline bool operator<(const GuidPrefix_t & g1, const GuidPrefix_t & g2)
+inline bool operator<(const Guid_t & g1, const Guid_t & g2)
 {
-  for (uint8_t i = 0; i < GuidPrefix_t::kSize; ++i) {
+  for (uint8_t i = 0; i < Guid_t::kSize; ++i) {
     if (g1.value[i] < g2.value[i]) {
       return true;
     } else if (g1.value[i] > g2.value[i]) {
@@ -96,23 +110,23 @@ inline bool operator<(const GuidPrefix_t & g1, const GuidPrefix_t & g2)
   return false;
 }
 
-inline std::ostream & operator<<(std::ostream & output, const GuidPrefix_t & guiP)
+inline std::ostream & operator<<(std::ostream & output, const Guid_t & guiP)
 {
   output << std::hex;
-  for (uint8_t i = 0; i < GuidPrefix_t::kSize - 1; ++i) {
+  for (uint8_t i = 0; i < Guid_t::kSize - 1; ++i) {
     output << static_cast<int>(guiP.value[i]) << ".";
   }
-  output << static_cast<int>(guiP.value[GuidPrefix_t::kSize - 1]);
+  output << static_cast<int>(guiP.value[Guid_t::kSize - 1]);
   return output << std::dec;
 }
 
 inline void dds_BuiltinTopicKey_to_GUID(
-  struct GuidPrefix_t * guid,
+  struct Guid_t * guid,
   dds_BuiltinTopicKey_t btk)
 {
-  memset(guid->value, 0, GuidPrefix_t::kSize);
+  memset(guid->value, 0, Guid_t::kSize);
 #if BIG_ENDIAN
-  memcpy(guid->value, reinterpret_cast<octet *>(btk.value), GuidPrefix_t::kSize - 4);
+  memcpy(guid->value, reinterpret_cast<octet *>(btk.value), Guid_t::prefix_size);
 #else
   octet const * keyBuffer = reinterpret_cast<octet *>(btk.value);
   for (uint8_t i = 0; i < 3; ++i) {
@@ -125,5 +139,35 @@ inline void dds_BuiltinTopicKey_to_GUID(
   }
 #endif
 }
+
+struct hash_guid
+{
+    std::size_t operator()(const Guid_t & guid) const
+  {
+    union u_convert {
+      uint8_t plain_value[sizeof(guid)];
+      uint32_t plain_ints[sizeof(guid) / sizeof(uint32_t)];
+    } u {};
+
+    static_assert(
+      sizeof(guid) == 16 &&
+      sizeof(u.plain_value) == sizeof(u.plain_ints) &&
+      offsetof(u_convert, plain_value) == offsetof(u_convert, plain_ints),
+      "Plain guid should be easily convertible to uint32_t[4]");
+
+    memcpy(u.plain_value, guid.value, Guid_t::kSize);
+
+    constexpr std::size_t prime_1 = 7;
+    constexpr std::size_t prime_2 = 31;
+    constexpr std::size_t prime_3 = 59;
+
+    size_t ret_val = prime_1 * u.plain_ints[0];
+    ret_val = prime_2 * (u.plain_ints[1] + ret_val);
+    ret_val = prime_3 * (u.plain_ints[2] + ret_val);
+    ret_val = u.plain_ints[3] + ret_val;
+
+    return ret_val;
+  }
+};
 
 #endif  // RMW_GURUMDDS_CPP__GUID_HPP_

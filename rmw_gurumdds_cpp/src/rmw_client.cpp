@@ -313,6 +313,8 @@ rmw_create_client(
   // Set GUID
   dds_DataWriter_get_guid(request_writer, client_guid);
   memcpy(client_info->writer_guid, client_guid, sizeof(client_guid));
+  dds_DataReader_get_guid(response_reader, client_guid);
+  memcpy(client_info->reader_guid, client_guid, sizeof(client_guid));
 
   entity_get_gid(
     reinterpret_cast<dds_Entity *>(client_info->request_writer),
@@ -752,6 +754,9 @@ rmw_send_request(
     ros_guid_to_dds_guid(
       reinterpret_cast<int8_t *>(client_info->writer_guid),
       reinterpret_cast<int8_t *>(&sampleinfo_ex.src_guid));
+    ros_guid_to_dds_guid(
+      reinterpret_cast<int8_t *>(client_info->reader_guid),
+      reinterpret_cast<int8_t *>(&sampleinfo_ex.related_guid));
 
     if (dds_DataWriter_raw_write_w_sampleinfoex(
         request_writer, dds_request, size, &sampleinfo_ex) != dds_RETCODE_OK)
